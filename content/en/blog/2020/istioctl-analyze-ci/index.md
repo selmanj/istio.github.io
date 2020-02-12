@@ -23,12 +23,7 @@ This is work in progress - notes are contained here.
 (Describe gitops approach to managing config. Link to https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
 {{< /idea >}}
 
-<<<<<<< HEAD
-||||||| constructed merge base
-https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world
-=======
 ## Setting up a precommit
->>>>>>> WIP
 
 An easy first step to safer config validation is to setup a pre-commit hook for
 your local git repository. This is a simple way to prevent committing code that
@@ -37,22 +32,9 @@ have to setup the same script on every repository you create. For that reason,
 pre-commit hooks are best used as a simple sanity check for your own workflow,
 and not as a means of enforcing policy.
 
-<<<<<<< HEAD
-## Setting up a precommit
-## Using analyze in continuous integration
+Here's an example file you can place in your repository:
 
-## Read more
-(Link to analyzer docs)
-(Link to https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
-
-||||||| constructed merge base
-
-## Setting up a precommit
-## Using analyze in continuous integration
-=======
-Below is a simple pre-commit hook you can use:
-
-{{< text bash >}}
+{{< text shell >}}
 #!/bin/sh
 #
 # Example pre-commit to run istioctl analyze on commit.
@@ -67,12 +49,18 @@ if ! [ -x "`command -v $ISTIOCTL`" ]; then
     exit 1
 fi
 
-
 find $ANALYZE_DIR \
     -type f \
     -name \*.yaml \
     -print0 | xargs -0 $ISTIOCTL analyze
 {{/< text >}}
 
-## Using analyze in continuous integration
->>>>>>> WIP
+If you named this file `istio-precommit`, you can then place it in the appropriate place with a symbolic link.
+
+{{< text bash >}}
+$ ln -s istio-precommit .git/hooks/pre-commit
+{{< /text>}}
+
+## Read more
+(Link to analyzer docs)
+(Link to https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
