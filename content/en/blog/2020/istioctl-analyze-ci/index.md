@@ -211,7 +211,53 @@ If you try to commit the file now, you should see an error:
 Error [IST0101] (VirtualService bookinfo-vs.bookinfo) Referenced gateway not found: "bookinfogateway"
 Error: Analyzers found issues when analyzing all namespaces.
 See https://istio.io/docs/reference/config/analysis for more information about causes and resolutions.
-{{< /text>}}
+{{< /<text>}}
+
+From the output above we can discern:
+
+* There was a single error with the error code `IST0101`
+* The resource under question is of kind `VirtualService`, named `bookinfo-vs`
+  in the `bookinfo` namespace
+* The gateway that wasn't found was named `bookinfogateway`
+
+With the above information, you should be able to discover the typo and correct
+the issue.
+
+Installing the pre-commit hook allowed you to discover the missing
+reference before applying the problematic configuration to your cluster.
+However, this only works for your local git repository; the next step is to
+begin enforcing this check via pull-requests.
+
+## istioctl analyze as a continuous integration step
+
+Shown here is an example of using `istioctl analyze` as a continuous integration
+check. [GitHub actions](https://help.github.com/en/actions/getting-started-with-github-actions/about-github-actions)
+is documented in this article; the actual integration of `istioctl analyze` should
+be straightforward to generalize to other continuous integration platforms. The
+directions below assume you are storing your cluster configuration in a GitHub
+repo and have enabled GitHub actions.
+
+Create a file in your repository named `.github/workflows/analyze.yml` with the
+contents:
+{{< text yaml >}}
+name: Analyze CI
+
+on:
+  pull_request:
+    branches: 
+    - master
+
+jobs:
+  analyze:
+    name: Analyze (local)
+    runs-on: [ubuntu-latest]
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: ./.github/actions/analyze
+{{/< text >}}
+
+
 
 {{< idea >}}
 NOTES
