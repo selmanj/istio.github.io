@@ -39,6 +39,10 @@ api-server. This article will show how to setup a workflow that will leverage
 (Describe gitops approach to managing config. Link to
 https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
 or [https://queue.acm.org/detail.cfm?id=3237207]
+
+Also prepare github.com/selmanj/example-istio-cluster for public consumption.
+
+Also note somewhere that we're assuming istioctl analyze 1.5.
 {{< /idea >}}
 
 The term 'GitOps' refers to the practice of treating configuration as code. More
@@ -56,6 +60,27 @@ GitOps workflows can be very detailed and advanced. In this article, we will
 only be concerned with running checks on incoming changes. More specifically,
 we'll show how to integrate `istioctl analyze` into a broader GitOps workflow. 
 
+Let's assume for now that we have the following structure in our git repository:
+
+{{< bash >}}
+$ tree .
+.
+├── cluster
+│   ├── namespaces
+│   │   ├── bookinfo.yaml
+│   │   └── hipster.yaml
+│   └── workloads
+│       ├── bookinfo
+│       │   └── bookinfo.yaml
+│       └── hipstershop
+│           └── kubernetes-manifests.yaml
+{{< /bash >}}
+
+We've got resources split up by namespaces and workloads, with two apps deployed
+to our cluster: a [hipster-shop demo app](https://github.com/GoogleCloudPlatform/microservices-demo)
+and the BookInfo app contained within the Istio samples folder. Within each yaml
+file is config representing both the workload as well as Istio-specific configuration.
+
 ## Setting up a precommit
 
 An easy first step to safer config validation is to setup a pre-commit hook for
@@ -65,56 +90,156 @@ have to setup the same script on every repository you create. For that reason,
 pre-commit hooks are best used as a simple sanity check for your own workflow,
 and not as a means of enforcing policy.
 
-This hook will be validating configuration the same way 
+Before installing the hook, it's a good idea to make sure we don't have any
+problems contained in our configuration. Let's invoke `istioctl analyze` in
+file-only mode.
 
-Here's an example file you can place in your repository:
+{{< bash >}}
+$ istioctl analyze --recursive cluster/ \
+    --use-kube false \
+    --all-namespaces \
+    --failure-threshhold Info
+✔ No validation issues found when analyzing all namespaces.
+{{< /bash >}}
+
+This command analyzes the files contained in the `cluster/` folder recursively. We also have
+specified the `--use-kube false` argument, which tells analyze to analyze only
+files. Without this option, it would additionally try to analyze our currently-configured
+default cluster. It's safe to leave out if you want to always analyze the
+current live cluster on every commit, but for now we'll disable it and show how
+to add live-cluster analysis as a CI-step.
+
+The `--all-namespaces` argument will ensure we check all namespaces. Finally,
+the `--failure-threshhold Info` defines what sort of problems we consider a
+failure (valid choices are `Error`, `Warn`, or `Info`). By specifying `Info` we
+are treating any problem as a failure - feel free to adjust this to your own
+situation.
+
+Note that the analyzer found no issues, so we can go ahead and install the
+pre-commit hook. Save the contents below to a file named `pre-commit.example`:
 
 {{< text shell >}}
-#!/bin/sh
+#!/bin/bash
 #
-# Example pre-commit to run istioctl analyze on commit.
-
+# Example pre-commit to run istioctl analyze on commit. To use, add to your git
+# precommit hook via `ln -s ../../pre-commit.example .git/hooks/pre-commit`.
+ 
 # Path to istioctl - replace with hardcoded path if you want to use a different binary.
-ISTIOCTL=istioctl
-# Directory containing config to analyze.
-ANALYZE_DIR="cluster/"
+ISTIOCTL=$HOME/bin/istioctl
+# Failure threshhold - valid values are Info/Warn/Error
+FAILURE_THRESHHOLD=Info
 
-if ! [ -x "`command -v $ISTIOCTL`" ]; then
-    echo "$ISTIOCTL command not found. Either add it to your path, or modify your pre-commit hook to specify the absolute path."
+if ! [ -x "$(command -v $ISTIOCTL)" ]; then
+    echo "$ISTIOCTL command not found. Either add it to your path, or modify"
+    echo "your pre-commit hook to specify the absolute path."
     exit 1
 fi
 
-find $ANALYZE_DIR \
-    -type f \
-    -name \*.yaml \
-    -print0 | xargs -0 $ISTIOCTL analyze
+$ISTIOCTL analyze -R cluster/ \
+    --use-kube=false \
+    --all-namespaces \
+    --failure-threshold $FAILURE_THRESHHOLD
 {{< /text >}}
 
-If you named this file `istio-precommit`, you can then place it in the appropriate place with a symbolic link.
+You can then install the hook with a symbolic link:
 
 {{< text bash >}}
-$ ln -s istio-precommit .git/hooks/pre-commit
+$ ln -s ../../pre-commit.example .git/hooks/pre-commit
 {{< /text>}}
 
-Now, whenever you commit a change to your repository, the `cluster/` directory will be automatically analyzed. You can try this out by introducing an error:
+Now, whenever you commit a change to your repository, the `cluster/` directory
+will be automatically analyzed. Let's introduce an error to test it out. Let's
+expose the `productpage` service via a `Gateway` resource; however we'll
+introduce a typo in the name of the gateway bound in the `VirtualService`:
+
+Place the below contents in `cluster/workloads/bookinfo/bookinfo-gateway.yaml`:
+{{< text yaml >}}
+# cluster/workloads/bookinfo/bookinfo-gateway.yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: bookinfo-gateway
+  namespace: bookinfo
+spec:
+  selector:
+    istio: ingressgateway 
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: bookinfo-vs
+  namespace: bookinfo
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - bookinfogateway
+  http:
+  - match:
+    - uri:
+        exact: /productpage
+    - uri:
+        prefix: /static
+    - uri:
+        exact: /login
+    - uri:
+        exact: /logout
+    - uri:
+        prefix: /api/v1/products
+    route:
+    - destination:
+        host: productpage
+        port:
+          number: 9080
+{{< /text >}}
+
+Note that the gateway is named `bookinfo-gateway`, but the virtual service
+refers to it as `bookinfogateway`. This sort of error is very easy to make and
+difficult to spot.
+
+If you try to commit the file now, you should see an error:
+
+{{< text bash >}}
+~/s/example-istio-cluster (master|…) $ git add cluster/workloads/bookinfo/bookinfo-gateway.yaml && git commit -m "Expose bookinfo's productpage via ingress"
+Error [IST0101] (VirtualService bookinfo-vs.bookinfo) Referenced gateway not found: "bookinfogateway"
+Error: Analyzers found issues when analyzing all namespaces.
+See https://istio.io/docs/reference/config/analysis for more information about causes and resolutions.
+{{< /text>}}
 
 {{< idea >}}
-This was tested with istioctl 1.5.0-prerelease which did not support -d and has slightly different output. Review once the next pre-release is published.
+NOTES
+
+* Document CI step, github action
+  * use example-istio-cluster
+  * show example of bringing in a large, vendor provided app (gitlab?)
+    * with large app not really free to modify yaml (or is undersirable) so show
+      how to suppress rule instead (port-names are unlabeled and it might be bad
+      to label them)
+    * also show suppressing via annotation (but need better example than
+      port-name, maybe)
+  * show example of exporting service to default namespace
+    * there's another app already in the cluster exposing the same name to
+      default!
+    * that team didn't check in their app (those jerks)
+    * with a CI step that analyzes live cluster AND PRs, you can catch issue
+      before it occurs (can't expose two different services to the same name) -
+      cool shit
+    * CI step is also useful for migrating to gitops
+* General observations about how objects can be inconsistent, so messages aren't
+  necessarily stable over time - might make sense to run live cluster analysis
+  as a CI job
+  * Still shows how gitops is better in this case since hte gitops view is never
+    "inconsistent"
+
 {{< /idea >}}
-{{< text bash >}}
-$ cat <<EOF > cluster/my-bad-service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-test-service
-  annotations:
-    a-non-existent-annotation.istio.io/not-here: test
-EOF
-$ git add cluster/my-bad-service && git commit -m "testing analyze pre-commit"
-Warn [IST0108] (Service my-test-service.default) Unknown annotation: a-non-existent-annotation.istio.io/not-here
-Error: Analyzers found issues.
-See https://istio.io/docs/reference/config/analysis for more information about causes and resolutions.
-{{< /text> }}
+
 ## Read more
 * (Link to analyzer docs)
 * (Link to https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
