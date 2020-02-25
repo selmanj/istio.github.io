@@ -12,17 +12,15 @@ target_release: 1.5
 This is work in progress - notes are contained here.
 {{< /idea >}}
 
-The Istio control plane has a large set of custom resources that, when viewed
-holistically, define the configuration of your service mesh. These resources
+The configuration of your service mesh is composed of a large set of custom
+resources. These resources
 often have complex interactions that are not easily understood in isolation. For
-example, to understand how a potential request might be routed to a service you
-need to potentially understand which `Gateway` resource will handle the request;
-you then need to consider how `VirtualService` resources will route that
-request, and then how the `DestinationRule` will ultimately apply to the
-answering service. As of Istio 1.4, custom resources are [defined with OpenAPI
+example, to understand how a hypothetical request might be routed to a service,
+you need to consider several resource type interactions: which gateway will
+handle the request, how virtual services will route that
+request, and which destination rule will ultimately apply to the request. As of Istio 1.4, custom resources are [defined with OpenAPI
 specs](https://istio.io/news/releases/1.4.x/announcing-1.4/upgrade-notes/#configuration-management)
-to help prevent common configuration mistakes. However these validations can
-only be applied in the context of a single resource. To discover and diagnose
+to help prevent common configuration mistakes. However these validations are only applied in the context of a single resource. To discover and diagnose
 misconfigurations across multiple objects, you can use `istioctl analyze`.
 
 If you haven't used it before, `istioctl analyze` is a command-line tool that
@@ -30,10 +28,19 @@ analyzes Istio configuration for problems. By default, it runs against the
 default configured cluster specified in your `~/.kube/config` file, checking
 resources on the api-server for files. While discovering such problems is useful,
 it would be much better to catch these problems *before* they are applied to the
-api-server. This article will show how to setup a workflow that will leverage
-`istioctl analyze` to discover problems before they ever occur on your cluster.
+api-server. 
 
-## Treating configuration as code (GitOps)
+This article shows how to setup a workflow that leverages `istioctl analyze` to discover problems before they ever occur on your cluster. It will cover:
+1. Defining a workflow for making changes to config
+1. Setting up a git pre-commit to ensure bad config never makes it past your
+  repository
+2. Automatically running `istioctl analyze` against every pull-request opened to
+  your repository
+3. Automatically running `istioctl analyze` against a combination of a live
+  cluster and an incoming pull-request
+
+
+## GitOps and continuous integration
 
 {{< idea >}}
 (Describe gitops approach to managing config. Link to
@@ -45,8 +52,12 @@ Also prepare github.com/selmanj/example-istio-cluster for public consumption.
 Also note somewhere that we're assuming istioctl analyze 1.5.
 {{< /idea >}}
 
+To ensure your Istio configuration is checked for errors before it is ever
+applied to your cluster, you'll need to:
+
+
 The term 'GitOps' refers to the practice of treating configuration as code. More
-specifically, this usually entails setting up a developer experience for your
+specifically, up a developer experience for your
 configuration the same way you would for software. In general this usually
 entails:
 
@@ -151,8 +162,8 @@ $ ln -s ../../pre-commit.example .git/hooks/pre-commit
 Now, whenever you commit a change to your repository, the `cluster/` directory
 will be automatically analyzed. It's a good idea to test out the pre-commit hook by
 introducing an error. Create a new change to expose the `productpage` service
-via a `Gateway` resource; however, introduce a typo in the name of the gateway
-bound in the `VirtualService`:
+via a gateway resource; however, introduce a typo in the name of the gateway
+bound in the virtual service:
 
 Place the below contents in `cluster/workloads/bookinfo/bookinfo-gateway.yaml`:
 {{< text yaml >}}
