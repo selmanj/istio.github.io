@@ -20,33 +20,27 @@ to help prevent common configuration mistakes. However these validations are onl
 misconfigurations across multiple objects, you can use `istioctl analyze`.
 
 `istioctl analyze` is a command-line tool that
-analyzes Istio configuration for problems. By default, it runs against the
+analyzes Istio configuration for potential problems. By default, it runs against the
 default configured cluster specified in your `~/.kube/config` file, checking
-configuration resources on the api-server for files. Discovering such problems
+configuration resources on the api server. Discovering such problems
 is useful, but it would be much better to catch these problems *before* they are applied to the
-api-server. 
+api server. 
 
-This article shows how to setup a workflow that leverages `istioctl analyze` to discover problems before they ever occur on your cluster. It will cover:
+This article shows how to setup a workflow that leverages `istioctl analyze` to
+discover problems before they ever occur on your cluster. It will cover:
+
 1. Defining a workflow for making changes to config
-1. Setting up a git pre-commit to ensure bad config never makes it past your
+2. Setting up a git pre-commit to ensure bad config never makes it past your
   repository
-2. Automatically running `istioctl analyze` against every pull-request opened to
+3. Automatically running `istioctl analyze` against every pull-request opened to
   your repository
-3. Automatically running `istioctl analyze` against a combination of a live
+4. Automatically running `istioctl analyze` against a combination of a live
   cluster and an incoming pull-request
 
+Note that this article assumes you are using a version of `istioctl` greater
+than or equal to 1.5. You can check your version by running `istioctl version`.
 
 ## GitOps and continuous integration
-
-{{< idea >}}
-(Describe gitops approach to managing config. Link to
-https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
-or [https://queue.acm.org/detail.cfm?id=3237207]
-
-Also prepare github.com/selmanj/example-istio-cluster for public consumption.
-
-Also note somewhere that we're assuming istioctl analyze 1.5.
-{{< /idea >}}
 
 If you're familiar with the term ['GitOps'](https://www.weave.works/technologies/gitops/), then you're familiar with the
 concept of treating your Kubernetes resource configuration the same way that you
@@ -63,7 +57,7 @@ GitOps workflows can be very complex; this blog post is only
 concerned with running checks on incoming changes. More specifically,
 this post shows how to integrate `istioctl analyze` into a broader GitOps workflow. 
 
-Let's assume for now that you have the following structure in your GitHub repository:
+For now, assume that you have the following structure in your GitHub repository:
 
 {{< text bash >}}
 $ tree .
@@ -120,7 +114,8 @@ will treat any problem as a failure - feel free to adjust this to your own
 situation.
 
 The analyzer found no issues, so you can go ahead and install the
-pre-commit hook. Save the contents below to a file named `pre-commit.example`:
+pre-commit hook. Save the contents below to a file named `pre-commit.example` at
+your repository root:
 
 {{< text shell >}}
 #!/bin/bash
@@ -139,13 +134,14 @@ if ! [ -x "$(command -v $ISTIOCTL)" ]; then
     exit 1
 fi
 
-$ISTIOCTL analyze -R cluster/ \
+$ISTIOCTL analyze --recursive cluster/ \
     --use-kube=false \
     --all-namespaces \
     --failure-threshold $FAILURE_THRESHOLD
 {{< /text >}}
 
-You can then install the hook with a symbolic link:
+You can then install the hook with a symbolic link. Assuming the `pre-commit.example`
+file exists at the repository root, run:
 
 {{< text bash >}}
 $ chmod +x pre-commit.example
@@ -311,7 +307,7 @@ messages (Services in the gitlab namespace). Then, supply a suppression using
 the `--suppress` argument:
 
 {{< text bash >}}
-$ istioctl analyze -R cluster/ \
+$ istioctl analyze --recursive cluster/ \
     --use-kube=false \
     --all-namespaces \
     --failure-threshold=Info \
@@ -332,42 +328,83 @@ overlay the set of local changes on top of the cluster view. This is very useful
 when your config repository might not be a complete representation of what's
 deployed in your cluster.
 
-{{< idea >}}
-The setup for github actions is pretty complex - it requires creating a custom
-Dockerimage with gcloud + istioctl, setting up a secret with a service account,
-and rigging it all up to post to the PR is complex. I can either document it
-entirely, or point to an example action that users can use. Thoughts?
-{{< /idea >}}
+Consider an example where you want to expose an existing service into the
+default namespace. To accomplish this, you might write a virtual service like
+the one below:
+
+{{< text yaml >}}
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: product-page
+  namespace: bookinfo
+spec:
+  hosts:
+  - productpage.default.svc.cluster.local
+  http:
+  - route:
+    - destination:
+        host: productpage.bookinfo.svc.cluster.local
+{{< /text >}}
+
+This exposes the host `productpage.bookinfo.svc.cluster.local` under the
+additional name `productpage.default.svc.cluster.local`. As a result, workloads
+running in the default namespace can send traffic directly to hostname
+`productpage` (note that there is no suffix) and traffic will be sent to the
+service named `productpage` running in the `bookinfo` namespace. 
+
+Continuing with our example, you then check in this file to your git repository.
+`istioctl analyze` doesn't detect any errors. However, imagine that you decided
+to analyze the change and the live cluster at the same time:
+
+{{< text bash >}}
+$ istioctl analyze --recursive cluster/ \
+    --use-kube=true # Note we set this to true rather than false \
+    --all-namespaces \
+    --failure-threshold=Info
+Error [IST0109] (VirtualService our-product-page.productpage-devel) The VirtualServices bookinfo/product-page, productpage-devel/our-product-page associated with mesh gateway define the same host */productpage.default.svc.cluster.local which can lead to undefined behavior. This can be fixed by merging the conflicting VirtualServices into a single resource.
+Error [IST0109] (VirtualService product-page.bookinfo) The VirtualServices bookinfo/product-page, productpage-devel/our-product-page associated with mesh gateway define the same host */productpage.default.svc.cluster.local which can lead to undefined behavior. This can be fixed by merging the conflicting VirtualServices into a single resource.
+Error: Analyzers found issues when analyzing all namespaces.
+See https://istio.io/docs/reference/config/analysis for more information about causes and resolutions.
+{{< /text>}}
+
+From reading the messages above, we see that there are two virtual services in
+conflict: the virtual service we introduced (`product-page.bookinfo`) and
+another virtual service in the cluster (`our-product-page.productpage-devel`).
+Both virtual services are attempting to define the same host name in the default
+namespace, and having them both defined at the same time would lead to undefined
+behavior. You can imagine that identifying this problem _before_ it occurs on
+your cluster is highly desirable!
+
+As the example above illustrates, analyzing configuration files overlayed on top
+of a live cluster is useful when your git repository doesn't contain all
+relevant configuration. This can happen if your team is still migrating all
+configuration to the repository, or if someone made changes directly to the
+cluster. Regardless, it's a good idea to introduce this check to your
+continuous integration processes, but be aware of its limitations: 
+
+* You'll have to manage a Kubernetes `.kube/config` file containing read-only
+  credentials to your cluster. Because this secret is available to the
+  continuous integration check, be sure that you trust the incoming change to
+  not accidently or deliberately expose the credential in your continous
+  integration logs.
+* The check is not necessarily reproducable; Kubernetes configuration is dynamic
+  and changes over time as various controllers, users, and other processes make
+  changes. It might be reasonable to run this check on a schedule to ensure you
+  catch any new issues that are caused by external systems.
+
+## Key points
+
+This article highlighted how you can leverage `istioctl analyze` to go beyond
+merely analyzing the currently-configured cluster. By setting up a GitOps-style
+workflow for your Istio configuration and running `istioctl analyze` locally and
+as part of a CI-workflow, you can catch problems before they ever occur in your
+cluster. 
+
+Want to learn more about `istioctl analyze`? You can [read the docs here](/docs/ops/diagnostic-tools/istioctl-analyze/).
 
 ## Learn more
 
-* (Link to analyzer docs)
 * (Link to https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
 * https://queue.acm.org/detail.cfm?id=3237207
 
-{{< idea >}}
-NOTES
-
-* Document CI step, github action
-  * use example-istio-cluster
-  * show example of bringing in a large, vendor provided app (gitlab?)
-    * with large app not really free to modify yaml (or is undersirable) so show
-      how to suppress rule instead (port-names are unlabeled and it might be bad
-      to label them)
-    * also show suppressing via annotation (but need better example than
-      port-name, maybe)
-  * show example of exporting service to default namespace
-    * there's another app already in the cluster exposing the same name to
-      default!
-    * that team didn't check in their app (those jerks)
-    * with a CI step that analyzes live cluster AND PRs, you can catch issue
-      before it occurs (can't expose two different services to the same name) -
-      cool shit
-    * CI step is also useful for migrating to gitops
-* General observations about how objects can be inconsistent, so messages aren't
-  necessarily stable over time - might make sense to run live cluster analysis
-  as a CI job
-  * Still shows how gitops is better in this case since hte gitops view is never
-    "inconsistent"
-
-{{< /idea >}}
