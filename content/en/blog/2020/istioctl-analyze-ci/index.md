@@ -8,10 +8,6 @@ keywords: []
 target_release: 1.5
 ---
 
-{{< idea >}}
-This is work in progress - notes are contained here.
-{{< /idea >}}
-
 The configuration of your service mesh is composed of a large set of custom
 resources. These resources
 often have complex interactions that are not easily understood in isolation. For
@@ -23,11 +19,11 @@ specs](https://istio.io/news/releases/1.4.x/announcing-1.4/upgrade-notes/#config
 to help prevent common configuration mistakes. However these validations are only applied in the context of a single resource. To discover and diagnose
 misconfigurations across multiple objects, you can use `istioctl analyze`.
 
-If you haven't used it before, `istioctl analyze` is a command-line tool that
+`istioctl analyze` is a command-line tool that
 analyzes Istio configuration for problems. By default, it runs against the
 default configured cluster specified in your `~/.kube/config` file, checking
-resources on the api-server for files. While discovering such problems is useful,
-it would be much better to catch these problems *before* they are applied to the
+configuration resources on the api-server for files. Discovering such problems
+is useful, but it would be much better to catch these problems *before* they are applied to the
 api-server. 
 
 This article shows how to setup a workflow that leverages `istioctl analyze` to discover problems before they ever occur on your cluster. It will cover:
@@ -52,26 +48,22 @@ Also prepare github.com/selmanj/example-istio-cluster for public consumption.
 Also note somewhere that we're assuming istioctl analyze 1.5.
 {{< /idea >}}
 
-To ensure your Istio configuration is checked for errors before it is ever
-applied to your cluster, you'll need to:
-
-
-The term 'GitOps' refers to the practice of treating configuration as code. More
-specifically, up a developer experience for your
-configuration the same way you would for software. In general this usually
-entails:
+If you're familiar with the term ['GitOps'](https://www.weave.works/technologies/gitops/), then you're familiar with the
+concept of treating your Kubernetes resource configuration the same way that you
+treat code. This allows you to establish a worfklow for making and releasing
+changes to configuration. In practice, this usually entails:
 
 * Storing configuration in a version-control system
-* Defining a workflow for proposing changes to configuration (often manifested
+* Defining a workflow for proposing changes to configuration (often
   via pull-requests)
 * Checks and validations are automatically run against configuration changes, both
   before and after approval
 
-GitOps workflows can be very detailed and advanced. This blog post is only 
+GitOps workflows can be very complex; this blog post is only 
 concerned with running checks on incoming changes. More specifically,
-this post will show how to integrate `istioctl analyze` into a broader GitOps workflow. 
+this post shows how to integrate `istioctl analyze` into a broader GitOps workflow. 
 
-Let's assume for now that you have the following structure in our git repository:
+Let's assume for now that you have the following structure in your GitHub repository:
 
 {{< text bash >}}
 $ tree .
@@ -92,9 +84,9 @@ to our cluster: a [hipster-shop demo app](https://github.com/GoogleCloudPlatform
 and the BookInfo app contained within the Istio samples folder. Within each yaml
 file is config representing both the workload as well as Istio-specific configuration.
 
-## Setting up a precommit
+## Setting up a pre-commit hook
 
-An easy first step to safer config validation is to setup a pre-commit hook for
+An easy first step to safer config validation is to set up a pre-commit hook for
 your local git repository. This is a simple way to prevent committing code that
 has problems to your repository, but please note that it only works locally; you'll
 have to setup the same script on every repository you create. For that reason,
@@ -102,44 +94,44 @@ pre-commit hooks are best used as a simple sanity check for your own workflow,
 and not as a means of enforcing policy.
 
 Before installing the hook, it's a good idea to make sure you don't have any
-problems contained in our configuration. Let's invoke `istioctl analyze` in
+existing problems with your configuration. Invoke `istioctl analyze` in
 file-only mode.
 
 {{< text bash >}}
 $ istioctl analyze --recursive cluster/ \
     --use-kube false \
     --all-namespaces \
-    --failure-threshhold Info
+    --failure-threshold Info
 ✔ No validation issues found when analyzing all namespaces.
 {{< /text >}}
 
 This command analyzes the files contained in the `cluster/` folder recursively. Also
-specified is the `--use-kube false` argument, which tells analyze to analyze only
-files. Without this option, it would additionally try to analyze our currently-configured
+specified is the `--use-kube false` argument, which tells analyze to not analyze
+the cluster configured in your `.kube/config` file. Without this option, it would additionally try to analyze your currently-configured
 default cluster. It's safe to leave out if you want to always analyze the
 current live cluster on every commit, but note that your results will be more
 inconsistent as the live cluster might be changing.
 
 The `--all-namespaces` argument will ensure that `istioctl analyze` checks all namespaces. Finally,
-the `--failure-threshhold Info` defines what sort of problems to consider as a
+the `--failure-threshold Info` defines what sort of problems to consider as a
 failure (valid choices are `Error`, `Warn`, or `Info`). By specifying `Info`,
 `istioctl analyze`
 will treat any problem as a failure - feel free to adjust this to your own
 situation.
 
-Note that the analyzer found no issues, so you can go ahead and install the
+The analyzer found no issues, so you can go ahead and install the
 pre-commit hook. Save the contents below to a file named `pre-commit.example`:
 
 {{< text shell >}}
 #!/bin/bash
 #
 # Example pre-commit to run istioctl analyze on commit. To use, add to your git
-# precommit hook via `ln -s ../../pre-commit.example .git/hooks/pre-commit`.
+# pre-commit hook via `ln -s ../../pre-commit.example .git/hooks/pre-commit`.
  
-# Path to istioctl - replace with hardcoded path if you want to use a different binary.
+# Path to istioctl - replace with hard-coded path if you want to use a different binary.
 ISTIOCTL=$HOME/bin/istioctl
-# Failure threshhold - valid values are Info/Warn/Error
-FAILURE_THRESHHOLD=Info
+# Failure threshold - valid values are Info/Warn/Error
+FAILURE_THRESHOLD=Info
 
 if ! [ -x "$(command -v $ISTIOCTL)" ]; then
     echo "$ISTIOCTL command not found. Either add it to your path, or modify"
@@ -150,12 +142,13 @@ fi
 $ISTIOCTL analyze -R cluster/ \
     --use-kube=false \
     --all-namespaces \
-    --failure-threshold $FAILURE_THRESHHOLD
+    --failure-threshold $FAILURE_THRESHOLD
 {{< /text >}}
 
 You can then install the hook with a symbolic link:
 
 {{< text bash >}}
+$ chmod +x pre-commit.example
 $ ln -s ../../pre-commit.example .git/hooks/pre-commit
 {{< /text>}}
 
@@ -165,7 +158,7 @@ introducing an error. Create a new change to expose the `productpage` service
 via a gateway resource; however, introduce a typo in the name of the gateway
 bound in the virtual service:
 
-Place the below contents in `cluster/workloads/bookinfo/bookinfo-gateway.yaml`:
+Store the configuration below in `cluster/workloads/bookinfo/bookinfo-gateway.yaml`:
 {{< text yaml >}}
 # cluster/workloads/bookinfo/bookinfo-gateway.yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -288,11 +281,11 @@ runs:
   - ['analyze', '-R', 'cluster/', '--all-namespaces', '--use-kube=false', '--failure-threshold=Info']
 {{< /text >}}
 
-This is the same command run as part of the pre-commit; however now the command
+This is the same command run as part of the pre-commit hook; however now the command
 is run whenever a pull request is opened to master. This ensures that new
 changes won't introduce any issues that analyze could have caught.
 
-### Suppressions
+### Suppress unwanted messages
 
 You might find that some messages aren't useful in your situation. For example,
 `istioctl analyze` will indicate port names that don't conform to Istio's naming
@@ -331,7 +324,7 @@ entire namespace.
 
 ## istioctl analyze against a live cluster with changes
 
-One of the more exciting features of `istioctl analyze` is being able to analyze
+One of the more exciting features of `istioctl analyze` is the ability to analyze
 a set of local files and a live cluster together. If you provide both a file or
 directory argument and the `--use-kube=true` flag, then `istioctl analyze` will
 analyze the current configured cluster defined in your `.kube/config` file and
@@ -346,25 +339,11 @@ and rigging it all up to post to the PR is complex. I can either document it
 entirely, or point to an example action that users can use. Thoughts?
 {{< /idea >}}
 
-
-## Summary
-
-To summarize the above, you can leverage `istioctl analyze` in your continuous
-integration workflow by:
-1. Setting up a git pre-commit to ensure bad config never makes it past your
-  repository
-2. Automatically running `istioctl analyze` against every pull-request opened to
-  your repository
-3. Automatically running `istioctl analyze` against a combination of a live
-  cluster and an incoming pull-request
-
-You can leverage any of the steps above to make sure your config is checked for
-problems before it ever gets applied to your cluster. 
-
 ## Learn more
 
 * (Link to analyzer docs)
 * (Link to https://cloud.google.com/solutions/addressing-continuous-delivery-challenges-in-a-kubernetes-world)
+* https://queue.acm.org/detail.cfm?id=3237207
 
 {{< idea >}}
 NOTES
