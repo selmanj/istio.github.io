@@ -239,6 +239,7 @@ GCP-IAM
 GCP_OPTS
 gdb
 git
+GitOps
 GitHub
 GKE-IAM
 GKE-Istio
@@ -424,6 +425,7 @@ pluggable
 png
 pprof
 pre-connected
+pre-commit
 pre-specified
 preconfigured
 prefetching
